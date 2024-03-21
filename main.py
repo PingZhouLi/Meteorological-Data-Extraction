@@ -9,3 +9,4 @@ def index():
 
 app.include_router(aemetRouter)
 
+#The required solution is hosted at /antartida (POST)

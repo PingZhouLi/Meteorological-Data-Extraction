@@ -1,3 +1,4 @@
+import pandas as pd
 import datetime
 import http.client
 import json
@@ -5,7 +6,8 @@ from fastapi import APIRouter
 import pytz
 from urllib.request import urlopen
 from models.customJson import CustomJson
-from models.aemet import MeteoParams, meteo_station_id
+from models.aemet import MeteoParams, getTimeAggEquivalent, meteo_station_id
+
 
 router = APIRouter()
 conn = http.client.HTTPSConnection("opendata.aemet.es")
@@ -18,7 +20,6 @@ headers = {
 def get_aemet_data(params: MeteoParams):
     url = f"/opendata/api/valores/climatologicos/inventarioestaciones/todasestaciones/?api_key={params.APIKey}"
     conn.request("GET", url, headers=headers)
-    #conn.request("GET", "/opendata/api/valores/climatologicos/inventarioestaciones/todasestaciones/?api_key=jyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJqbW9udGVyb2dAYWVtZXQuZXMiLCJqdGkiOiI3NDRiYmVhMy02NDEyLTQxYWMtYmYzOC01MjhlZWJlM2FhMWEiLCJleHAiOjE0NzUwNTg3ODcsImlzcyI6IkFFTUVUIiwiaWF0IjoxNDc0NjI2Nzg3LCJ1c2VySWQiOiI3NDRiYmVhMy02NDEyLTQxYWMtYmYzOC01MjhlZWJlM2FhMWEiLCJyb2xlIjoiIn0.xh3LstTlsP9h5cxz3TLmYF4uJwhOKzA0B6-vH8lPGGw", headers=headers)
     res = conn.getresponse()
     data = res.read()
     print(data.decode("utf-8"))
@@ -43,16 +44,41 @@ def get_aemet_data(params: MeteoParams):
     data_web = json.loads(data.decode("utf-8"))
     #The expected data is generated inside a new link
     link = data_web['datos']
+
+    transformed_data = getAggregatedData(link, params.Time_Agg)
+    #The result is displayed at the Terminal
+    print('The solution is: ')
+    print(transformed_data)
+    result = data
+    if (transformed_data.any):
+        result = transformed_data.to_json(orient='records', date_format='iso')
+    return result
+
+def getAggregatedData(link: str, granularity: str):
+    #We open the link provided to get the data
     f = urlopen(link)
     myfile = f.read()
-    print(myfile)
     original_data = json.loads(myfile)
-    #Some function for aggregation depending on the "Time_Agg" parameter should be added here
-    #The Datetime field should be changed back to CET/CEST
-    new_data = []
-    for od in original_data:
-        new_data.append(CustomJson(od))
-    resultado = data
-    if (new_data):
-        resultado = json.dumps(new_data, indent=4)
-    return resultado
+    ##The Datetime field should be changed back to CET/CEST
+    ##Convert the array of objects into a DataFrame with the specified property names for pandas aggrupation functions
+    # ["Station"] <= ["nombre"]
+    # ["Datetime"] <= ["fhora"]
+    # ["Temperature (ºC)"] <= ["temp"]
+    # ["Pressure (hpa)"] <= ["pres"]
+    # ["Speed (m/s)"] <= ["vel"]
+    df = pd.DataFrame([{'Station': d['nombre'],'Datetime': d['fhora'], 'Temperature (ºC)': d['temp'], 'Pressure (hpa)': d['pres'], 'Speed (m/s)': d['vel']} for d in original_data])
+
+    timeAgg = getTimeAggEquivalent(granularity)
+
+    if (timeAgg):
+        #Set the datetime column as the index
+        df['Datetime'] = pd.to_datetime(df["Datetime"])
+        #A guess is made that the datetime provided by the server is in UTC, so we convert it to Europe/Madrid as requested 
+        df['Datetime'] = pd.to_datetime(df["Datetime"]).dt.tz_localize('UTC').dt.tz_convert('Europe/Madrid')
+        df.set_index('Datetime', inplace=True)
+        #The output dataset shall be aggregated based on the user selection of the Time Aggregation field. It's strange that it's required aggregation instead of averaging
+        new_data = df.groupby('Station').resample(timeAgg).agg({'Temperature (ºC)':'sum','Pressure (hpa)':'sum','Speed (m/s)':'sum'}).reset_index()
+    else:
+        new_data = df
+
+    return new_data

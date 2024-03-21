@@ -3,6 +3,8 @@ import json
 
 import pytz
 
+#Not used at the current solution
+
 class CustomJson(dict):
     def __init__(self, data):
         super().__init__()
